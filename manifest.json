@@ -47,6 +47,10 @@
     {
       "name": "airbnb_listing_details",
       "description": "Get detailed information about a specific Airbnb listing including amenities, policies, location details, and highlights."
+    },
+    {
+      "name": "airbnb_listing_reviews",
+      "description": "Fetch guest reviews for a specific Airbnb listing. Returns the full review text plus Airbnb's AI-generated review tags so an agent can scan for keywords like 'noise', 'wifi', or 'cleanliness'. Supports limit/offset paging."
     }
   ],
   "tools_generated": false,
