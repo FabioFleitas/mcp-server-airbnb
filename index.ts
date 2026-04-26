@@ -142,7 +142,7 @@ const AIRBNB_LISTING_DETAILS_TOOL: Tool = {
 
 const AIRBNB_LISTING_REVIEWS_TOOL: Tool = {
   name: "airbnb_listing_reviews",
-  description: "Fetch guest reviews for a specific Airbnb listing. Returns the full text of each review so the agent can scan for keywords (e.g. 'noise', 'wifi', 'cleanliness'). Paginates Airbnb's reviews endpoint server-side and returns a flat list along with the total review count and Airbnb's AI-generated review tags.",
+  description: "Fetch guest reviews for a specific Airbnb listing. Returns the full text of each review along with Airbnb's AI-generated review tags. Supports server-side keyword search (query) and tag filtering (tagName) — prefer these over fetching everything on listings with many reviews. Matched terms are wrapped in <mark> tags in the comments field.",
   inputSchema: {
     type: "object",
     properties: {
@@ -150,13 +150,21 @@ const AIRBNB_LISTING_REVIEWS_TOOL: Tool = {
         type: "string",
         description: "The Airbnb listing ID"
       },
+      query: {
+        type: "string",
+        description: "Free-text keyword search across review content (e.g. 'noise', 'air conditioning', 'wifi'). Multi-word queries are supported. Returns only matching reviews with matched terms wrapped in <mark> tags. Combines with tagName."
+      },
+      tagName: {
+        type: "string",
+        description: "Filter to a single Airbnb-tagged category. Use the uppercase 'name' from the reviewTags response field, e.g. 'CLEANLINESS', 'LOCATION', 'HOSPITALITY', 'WALKABILITY', 'PARKING', 'VIEW'. Bogus names silently return zero results. Combines with query."
+      },
       limit: {
         type: "number",
-        description: "Maximum number of reviews to return. Omit to fetch all reviews on the listing (popular listings can have hundreds, which is token-heavy)."
+        description: "Maximum number of reviews to return. Omit to fetch all matching reviews (after filters)."
       },
       offset: {
         type: "number",
-        description: "Number of reviews to skip before returning. Defaults to 0. Use with limit for paging through large listings."
+        description: "Number of reviews to skip before returning. Defaults to 0. Use with limit for paging."
       },
       sortingPreference: {
         type: "string",
@@ -862,27 +870,29 @@ async function fetchReviewsPage(
   globalListingId: string,
   offset: number,
   limit: number,
-  sortingPreference: string
+  sortingPreference: string,
+  query?: string,
+  tagName?: string
 ): Promise<any> {
-  const variables = {
-    id: globalListingId,
-    pdpReviewsRequest: {
-      fieldSelector: "for_p3_translation_only",
-      forPreview: false,
-      limit,
-      offset: String(offset),
-      showingTranslationButton: false,
-      first: limit,
-      sortingPreference,
-      checkinDate: null,
-      checkoutDate: null,
-      numberOfAdults: "1",
-      numberOfChildren: "0",
-      numberOfInfants: "0",
-      numberOfPets: "0",
-      amenityFilters: null,
-    },
+  const pdpReviewsRequest: Record<string, any> = {
+    fieldSelector: "for_p3_translation_only",
+    forPreview: false,
+    limit,
+    offset: String(offset),
+    showingTranslationButton: false,
+    first: limit,
+    sortingPreference,
+    checkinDate: null,
+    checkoutDate: null,
+    numberOfAdults: "1",
+    numberOfChildren: "0",
+    numberOfInfants: "0",
+    numberOfPets: "0",
+    amenityFilters: null,
   };
+  if (query) pdpReviewsRequest.query = query;
+  if (tagName) pdpReviewsRequest.tagName = tagName;
+  const variables = { id: globalListingId, pdpReviewsRequest };
   const extensions = {
     persistedQuery: { version: 1, sha256Hash: STAYS_PDP_REVIEWS_QUERY_HASH },
   };
@@ -927,6 +937,8 @@ async function fetchReviewsPage(
 async function handleAirbnbListingReviews(params: any) {
   const {
     id,
+    query,
+    tagName,
     limit,
     offset = 0,
     sortingPreference = "MOST_RECENT",
@@ -965,7 +977,7 @@ async function handleAirbnbListingReviews(params: any) {
   const userLimit = limit !== undefined ? Math.max(0, parseInt(String(limit))) : undefined;
 
   try {
-    log("info", "Fetching listing reviews", { id, offset: startOffset, limit: userLimit, sortingPreference });
+    log("info", "Fetching listing reviews", { id, offset: startOffset, limit: userLimit, sortingPreference, query, tagName });
 
     const allReviews: any[] = [];
     let total: number | undefined;
@@ -977,7 +989,7 @@ async function handleAirbnbListingReviews(params: any) {
       if (remaining <= 0) break;
 
       const pageSize = Math.min(REVIEWS_PAGE_SIZE, remaining);
-      const json = await fetchReviewsPage(globalListingId, cursor, pageSize, sortingPreference);
+      const json = await fetchReviewsPage(globalListingId, cursor, pageSize, sortingPreference, query, tagName);
       const node = json?.data?.presentation?.stayProductDetailPage?.reviews;
       if (!node) {
         const errors = json?.errors;
@@ -1023,6 +1035,8 @@ async function handleAirbnbListingReviews(params: any) {
           returned: allReviews.length,
           offset: startOffset,
           sortingPreference,
+          query: query ?? null,
+          tagName: tagName ?? null,
           reviewTags,
           reviews: allReviews,
         }, null, 2)
